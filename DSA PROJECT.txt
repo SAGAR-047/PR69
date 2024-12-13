@@ -1,0 +1,375 @@
+#include <GLUT/glut.h>
+#include <stdio.h>
+#include <stdlib.h>
+#include <math.h>
+
+#define PI 3.14159265358979323846
+
+// Node for linked list of 2D points
+typedef struct Node2D {
+    float x, y;
+    struct Node2D *next;
+} *Node2D;
+
+// Linked list for blueprint
+typedef struct {
+    Node2D head;
+    int size;
+} *LinkedList2D;
+
+// Data structure for 3D point
+typedef struct {
+    float x, y, z;
+} Point3D;
+
+// Global variables
+float angleX = 0.0f, angleY = 0.0f, zoom = -3.0f;
+int lastX = 0, lastY = 0;
+LinkedList2D blueprint;
+float extrusionHeight = 1.0f;
+int choice;  // Global variable for user choice
+int pyramid_segments = 3;  // Default segments for the pyramid
+int prism_segments = 3;    // Default segments for the prism
+
+// Utility to add a point to the linked list
+void add_point(LinkedList2D list, float x, float y) {
+    Node2D new_node = (Node2D)malloc(sizeof(struct Node2D));
+    new_node->x = x;
+    new_node->y = y;
+    new_node->next = list->head;
+    list->head = new_node;
+    list->size++;
+}
+
+// Utility to free the linked list
+void free_list(LinkedList2D list) {
+    Node2D current = list->head;
+    while (current != NULL) {
+        Node2D temp = current;
+        current = current->next;
+        free(temp);
+    }
+    list->head = NULL;
+    list->size = 0;
+}
+
+// Extrude a 2D point into a 3D point
+Point3D extrude_point(Node2D point, float height) {
+    return (Point3D){point->x, point->y, height};
+}
+
+// Draw edges
+void draw_edges(Point3D p1, Point3D p2, Point3D p3, Point3D p4) {
+    glColor3f(0.0f, 0.0f, 0.0f);  // Black edges
+    glLineWidth(1.5f);
+    glBegin(GL_LINES);
+    glVertex3f(p1.x, p1.y, p1.z); glVertex3f(p2.x, p2.y, p2.z);
+    glVertex3f(p2.x, p2.y, p2.z); glVertex3f(p3.x, p3.y, p3.z);
+    glVertex3f(p3.x, p3.y, p3.z); glVertex3f(p4.x, p4.y, p4.z);
+    glVertex3f(p4.x, p4.y, p4.z); glVertex3f(p1.x, p1.y, p1.z);
+    glEnd();
+}
+
+// Draw a wall (quad or triangle)
+void draw_wall(Point3D p1, Point3D p2, Point3D p3, Point3D p4) {
+    glColor3f(1.0f, 0.5f, 0.0f);  // Orange walls
+    glBegin(GL_QUADS);
+    glVertex3f(p1.x, p1.y, p1.z);
+    glVertex3f(p2.x, p2.y, p2.z);
+    glVertex3f(p3.x, p3.y, p3.z);
+    glVertex3f(p4.x, p4.y, p4.z);
+    glEnd();
+    glColor3f(0.0f, 0.0f, 0.0f);  // Black edges
+    glLineWidth(2.0f);
+    glBegin(GL_LINES);
+    glVertex3f(p1.x, p1.y, p1.z); glVertex3f(p2.x, p2.y, p2.z);
+    glVertex3f(p2.x, p2.y, p2.z); glVertex3f(p3.x, p3.y, p3.z);
+    glVertex3f(p3.x, p3.y, p3.z); glVertex3f(p4.x, p4.y, p4.z);
+    glVertex3f(p4.x, p4.y, p4.z); glVertex3f(p1.x, p1.y, p1.z);
+    glEnd();
+}
+
+// Draw top and bottom faces
+void draw_faces_with_edges(LinkedList2D blueprint, float height) {
+    glColor3f(1.0f, 0.5f, 0.0f);  // Orange faces
+    Node2D current = blueprint->head;
+    glBegin(GL_POLYGON);  // Bottom face
+    while (current) {
+        Point3D p = extrude_point(current, 0.0f);
+        glVertex3f(p.x, p.y, p.z);
+        current = current->next;
+    }
+    glEnd();
+    current = blueprint->head;
+    glBegin(GL_POLYGON);  // Top face
+    while (current) {
+        Point3D p = extrude_point(current, height);
+        glVertex3f(p.x, p.y, p.z);
+        current = current->next;
+    }
+    glEnd();
+    current = blueprint->head;
+    Point3D first = extrude_point(current, 0.0f);
+    Point3D last = first;
+    while (current) {
+        Point3D p1 = extrude_point(current, 0.0f);
+        Point3D p2 = extrude_point(current, height);
+        if (current->next) {
+            Point3D p3 = extrude_point(current->next, 0.0f);
+            draw_edges(p1, p2, extrude_point(current->next, height), p3);
+        }
+        current = current->next;
+    }
+}
+
+void draw_sphere() {
+    glColor3f(1.5f, 0.5f, 0.0f);  // Orange solid sphere
+    glutSolidSphere(1.0, 30, 30); // Solid sphere (radius 0.5, 30 slices, 30 stacks)
+
+    glColor3f(0.0f, 0.0f, 0.0f);  // Black wireframe
+    glLineWidth(1.3f);
+    glutWireSphere(1.0, 30, 30);  // Wireframe overlay (radius 0.5, 30 slices, 30 stacks)
+}
+// Draw the 3D extruded shape
+void draw_shape() {
+    if (choice == 5) {  // Sphere
+        draw_sphere();
+    } else if (choice == 3) {  // Pyramid
+        Point3D apex = {0.0f, 0.0f, extrusionHeight};
+        Node2D current = blueprint->head;
+
+        do {
+            Node2D next = current->next ? current->next : blueprint->head;
+            Point3D p1 = extrude_point(current, 0.0f);
+            Point3D p2 = extrude_point(next, 0.0f);
+
+            // Draw wall connecting base edge to apex
+            draw_wall(p1, p2, apex, apex);
+            current = current->next;
+        } while (current);
+
+        // Draw base face with edges
+        draw_faces_with_edges(blueprint, 0.0f);
+    } else {
+        Node2D current = blueprint->head;
+
+        do {
+            Node2D next = current->next ? current->next : blueprint->head;
+            Point3D p1 = extrude_point(current, 0.0f);
+            Point3D p2 = extrude_point(next, 0.0f);
+            Point3D p3 = extrude_point(next, extrusionHeight);
+            Point3D p4 = extrude_point(current, extrusionHeight);
+
+            // Draw wall (quad) and its edges
+            draw_wall(p1, p2, p3, p4);
+            current = current->next;
+        } while (current);
+
+        // Draw top and bottom faces with edges
+        draw_faces_with_edges(blueprint, extrusionHeight);
+    }
+}
+
+// Create shapes (square, rectangle, prism, pyramid)
+void create_square() {
+    free_list(blueprint);
+    add_point(blueprint, -0.5f, -0.5f);
+    add_point(blueprint, 0.5f, -0.5f);
+    add_point(blueprint, 0.5f, 0.5f);
+    add_point(blueprint, -0.5f, 0.5f);
+}
+
+void create_rectangular() {
+    free_list(blueprint);
+    add_point(blueprint, -1.0f, -0.5f);
+    add_point(blueprint, 1.0f, -0.5f);
+    add_point(blueprint, 1.0f, 0.5f);
+    add_point(blueprint, -1.0f, 0.5f);
+}
+
+void create_pyramid(int segments) {
+    free_list(blueprint);
+    for (int i = 0; i < segments; ++i) {
+        float angle = 2 * PI * i / segments;
+        add_point(blueprint, 0.5f * cos(angle), 0.5f * sin(angle));
+    }
+}
+
+void create_prism(int segments) {
+    free_list(blueprint);
+    for (int i = 0; i < segments; ++i) {
+        float angle = 2 * PI * i / segments;
+        add_point(blueprint, 0.5f * cos(angle), 0.5f * sin(angle));
+    }
+}
+
+// OpenGL Callbacks
+void display() {
+    glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
+    glLoadIdentity();
+
+    glTranslatef(0.0f, 0.0f, zoom);
+    glRotatef(angleX, 1.0f, 0.0f, 0.0f);
+    glRotatef(angleY, 0.0f, 1.0f, 0.0f);
+
+    draw_shape();
+    glutSwapBuffers();
+}
+
+void mouse_motion(int x, int y) {
+    int dx = x - lastX;
+    int dy = y - lastY;
+    angleX += dy * 0.5f;
+    angleY += dx * 0.5f;
+    lastX = x;
+    lastY = y;
+    glutPostRedisplay();
+}
+
+void mouse_click(int button, int state, int x, int y) {
+    if (button == GLUT_LEFT_BUTTON && state == GLUT_DOWN) {
+        lastX = x;
+        lastY = y;
+    }
+}
+
+void keyboard(unsigned char key, int x, int y) {
+    switch (key) {
+        case '1':  // Cube
+            create_square();
+            extrusionHeight = 1.0f;
+            choice = 1;  // Update choice
+            glutPostRedisplay();
+            break;
+        case '2':  // Cuboid
+            create_rectangular();
+            extrusionHeight = 1.0f;
+            choice = 2;  // Update choice
+            glutPostRedisplay();
+            break;
+        case '3':  // Pyramid
+            create_pyramid(pyramid_segments);
+            extrusionHeight = 1.0f;
+            choice = 3;  // Update choice
+            glutPostRedisplay();
+            break;
+        case '4':  // Prism
+            create_prism(prism_segments);
+            extrusionHeight = 1.0f;
+            choice = 4;  // Update choice
+            glutPostRedisplay();
+            break;
+        case '5':  // Sphere
+            free_list(blueprint);  // No blueprint needed for the sphere
+            choice = 5;  // Update choice
+            glutPostRedisplay();
+            break;
+        case '=':  // Increase zoom
+            zoom += 0.1f;
+            glutPostRedisplay();
+            break;
+        case '-':  // Decrease zoom
+            zoom -= 0.1f;
+            glutPostRedisplay();
+            break;
+        case '[':  // Decrease segment count for pyramid or prism
+            if (choice == 3 && pyramid_segments > 3) {
+                pyramid_segments--;
+                create_pyramid(pyramid_segments);  // Update pyramid
+                glutPostRedisplay();
+            }
+            if (choice == 4 && prism_segments > 3) {
+                prism_segments--;
+                create_prism(prism_segments);  // Update prism
+                glutPostRedisplay();
+            }
+            break;
+        case ']':  // Increase segment count for pyramid or prism
+            if (choice == 3) {
+                pyramid_segments++;
+                create_pyramid(pyramid_segments);  // Update pyramid
+                glutPostRedisplay();
+            }
+            if (choice == 4) {
+                prism_segments++;
+                create_prism(prism_segments);  // Update prism
+                glutPostRedisplay();
+            }
+            break;
+        case 'q':  // Quit program
+            free_list(blueprint);
+            exit(0);
+    }
+}
+
+int main(int argc, char **argv) {
+    blueprint = (LinkedList2D)malloc(sizeof(*blueprint));
+    blueprint->head = NULL;
+    blueprint->size = 0;
+
+    printf("Choose a shape to extrude:\n");
+    printf("1. Cube\n");
+    printf("2. Cuboid\n");
+    printf("3. Pyramid\n");
+    printf("4. Prism\n");
+    printf("5. Sphere\n");
+    scanf("%d", &choice);
+
+    switch (choice) {
+        case 1:
+            create_square();
+            break;
+        case 2:
+            create_rectangular();
+            break;
+        case 3: {
+            printf("Enter the number of segments for the pyramid base: ");
+            scanf("%d", &pyramid_segments);
+            if (pyramid_segments < 3) {
+                printf("A pyramid base must have at least 3 segments!\n");
+                return 1;
+            }
+            create_pyramid(pyramid_segments);
+            break;
+        }
+        case 4:
+            printf("Enter number of segments for the prism: ");
+            scanf("%d", &prism_segments);
+            if (prism_segments < 3) {
+                printf("A prism must have at least 3 segments!\n");
+                return 1;
+            }
+            create_prism(prism_segments);
+            break;
+        case 5:
+            break;  // Sphere doesn't need additional parameters
+        default:
+            printf("Invalid choice!\n");
+            return 1;
+    }
+
+    glutInit(&argc, argv);
+    glutInitDisplayMode(GLUT_DOUBLE | GLUT_RGB | GLUT_DEPTH);
+    glutInitWindowSize(800, 600);
+    glutCreateWindow("3D Shape with Edges");
+
+    glEnable(GL_DEPTH_TEST);
+    glClearColor(0.1f, 0.1f, 0.1f, 1.0f);
+
+    glMatrixMode(GL_PROJECTION);
+    glLoadIdentity();
+    gluPerspective(45, 1.33, 1, 100);
+
+    glMatrixMode(GL_MODELVIEW);
+
+    glutDisplayFunc(display);
+    glutMouseFunc(mouse_click);
+    glutMotionFunc(mouse_motion);
+    glutKeyboardFunc(keyboard);
+
+    glutMainLoop();
+
+    free_list(blueprint);
+    free(blueprint);
+    return 0;
+}
